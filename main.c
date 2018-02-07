@@ -57,7 +57,9 @@ jobject object;
 jobject CSVobject;
 long status;
 
-HANDLE thread;
+HANDLE thread;//thread for watching scroller
+HANDLE thread2;//thread for watching file change
+
 
 /*  Declare Windows procedure  */
 LRESULT CALLBACK WindowProcedure (HWND, UINT, WPARAM, LPARAM);
@@ -75,7 +77,16 @@ HINSTANCE ThisInstance;
 HINSTANCE PrevInstance;
 LPSTR _lpszArgument;
 int visible; 
-char lastSearchKey[15];      
+char lastSearchKey[15];     
+
+struct args
+	{
+		JavaVM *jvm;
+		char *remotePath;
+		char *localPath;
+		char *fileName;
+		char *userID;
+	}a; 
 
 //pthread_mutex_t mutexjvm;     /* This is the handle for our window */
 /*  Make the class name into a global variable  */
@@ -477,12 +488,14 @@ LRESULT CALLBACK WindowProcedure3 (HWND hwnd, UINT message, WPARAM wParam, LPARA
             }
             else
             {
+            	TerminateThread(thread2,1);
                 createFile(fileName,user);
             }
         }
         break;
     }
     case WM_DESTROY:
+    	closeFlag=1;
         createWindow3();
         break;
     default:                
@@ -492,7 +505,7 @@ LRESULT CALLBACK WindowProcedure3 (HWND hwnd, UINT message, WPARAM wParam, LPARA
 }
 
 //Thread to check the scroller position
-static DWORD WINAPI ThreadFunc(JavaVM **jvm) {
+static DWORD WINAPI watchScroller(JavaVM *jvm) {
   while(closeFlag!=1)
   {
 		int itemCount=ListView_GetItemCount(hwndList);
@@ -502,14 +515,61 @@ static DWORD WINAPI ThreadFunc(JavaVM **jvm) {
 	    	int topIndex=SendMessage(hwndList,LVM_GETTOPINDEX,0,0);
 	        if(topIndex>=itemCount-itemsPerPage)
 	        {
-	        	(**jvm)->AttachCurrentThread(jvm, (void**) &(env), NULL);
+	        	printf("Thread executed 1");
+	        	(*jvm)->AttachCurrentThread(jvm, (void**) &(env), NULL);
 	        	loadMoreItems();
+	        	printf("Thread executed 2");
 			}	
 		}
   }
   ExitThread(0);
   return 0;
 }
+
+//Thread to monitor file changes
+static DWORD WINAPI watchFile(void* arg) {
+  struct args *ptr = (struct args*) arg;
+  JavaVM *jvm = ptr -> jvm;	
+  while(closeFlag!=1)
+  {
+  		sleep(1);
+  		(*jvm)->AttachCurrentThread(jvm, (void**) &(env), NULL);
+  		jclass cls;
+	    jmethodID mid;
+	
+	    jstring remote = (*env)->NewStringUTF(env,ptr->remotePath);
+	
+	    if (status != JNI_ERR)
+	    {
+	        cls=(*env)->GetObjectClass(env,object);
+	        if(cls !=0)
+	        {
+	            mid = (*env)->GetMethodID(env, cls, "isChanged", "(Ljava/lang/String;)I");
+	            if(mid !=0)
+	            {
+	                jint i=(*env)->CallIntMethod(env, object, mid,remote);
+	                if(i==1)
+	                {
+	                	MessageBox(0,"File content has been changed","Message",1);
+	                	showFileContent(ptr->fileName,ptr->userID);
+	                	break;
+					}
+	            }
+	            else
+	            {
+	                printf("method not found");
+	            }
+	        }
+	        else
+	        {
+	            printf("class not found");
+	        }
+	    }
+  }
+  ExitThread(0);
+  return 0;
+}
+
 
 LRESULT CALLBACK WindowProcedure4 (HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -576,6 +636,7 @@ LRESULT CALLBACK WindowProcedure4 (HWND hwnd, UINT message, WPARAM wParam, LPARA
             else
             {
             	TerminateThread(thread,1);
+            	TerminateThread(thread2,1);
                 createFile(fileName,user);
             }
 		}
@@ -660,8 +721,6 @@ void createFile(char fileName[],char UserID[])
         //finish_with_error(&mysql);
         //MessageBox(0,"Error query","Message",1);
     }
-
-
     char *localPath = (char*)malloc(50);
     snprintf(localPath, 49,"E:/Local Files/Users/%s/%s",UserID,fileName);
     jstring local = (*env)->NewStringUTF(env,localPath);
@@ -720,8 +779,8 @@ void showFileContent(char fileName[],char userID[])
     char *dot;
     int i=0;
 
+	
     FILE *fptr;
-
     jclass cls;
     jmethodID mid;
 
@@ -788,7 +847,8 @@ void showFileContent(char fileName[],char userID[])
 	        }
 	    }
     	closeFlag=0;
-		thread = CreateThread(NULL, 0, ThreadFunc, &jvm, 0, NULL);
+		thread = CreateThread(NULL, 0,watchScroller, jvm, 0, NULL);
+		printf("Thread 1 created");
 	}
     else
     {
@@ -810,6 +870,17 @@ void showFileContent(char fileName[],char userID[])
 	    SetWindowText(fileContentText,content);
 	    fclose(fptr);
 	}
+	a.jvm=jvm;
+	printf("before thread 2 creation");
+	//a.remotePath=(char*)malloc(sizeof(remotePath));
+	a.remotePath=remotePath;
+	a.localPath=localPath;
+	a.fileName=fileName;
+	a.userID=userID;
+	closeFlag=0;
+	printf("before thread 2 creation");
+	thread2 = CreateThread(NULL, 0,watchFile,(void*) &a, 0, NULL);
+	printf("Thread 2 created");
 }
 
 
@@ -1010,7 +1081,7 @@ void createJVM()
 {
     jclass cls;
     jmethodID constructor;
-    options[0].optionString = "-Djava.class.path=E:\\JNI;E:\\JNI\\commons-net-ftp-2.0.jar;E:\\JNI\\aopalliance-1.0.jar;E:\\JNI\\slf4j.jar;E:\\JNI\\ftplet-api-1.0.6.jar;E:\\JNI\\ftpserver-core-1.0.6.jar;E:\\JNI\\jcl-over-slf4j-1.5.2.jar;E:\\JNI\\log4j-1.2.14.jar;E:\\JNI\\mina-core-2.0.4.jar;E:\\JNI\\slf4j-api-1.5.2.jar;E:\\JNI\\slf4j-log4j12-1.5.2.jar;E:\\JNI\\spring-beans-2.5.5.jar;E:\\JNI\\spring-context-2.5.5.jar;E:\\JNI\\spring-core-2.5.5.jar";
+    options[0].optionString = "-Djava.class.path=E:\\JNI;E:\\JNI\\commons-net-3.6.jar;E:\\JNI\\aopalliance-1.0.jar;E:\\JNI\\slf4j.jar;E:\\JNI\\ftplet-api-1.0.6.jar;E:\\JNI\\ftpserver-core-1.0.6.jar;E:\\JNI\\jcl-over-slf4j-1.5.2.jar;E:\\JNI\\log4j-1.2.14.jar;E:\\JNI\\mina-core-2.0.4.jar;E:\\JNI\\slf4j-api-1.5.2.jar;E:\\JNI\\slf4j-log4j12-1.5.2.jar;E:\\JNI\\spring-beans-2.5.5.jar;E:\\JNI\\spring-context-2.5.5.jar;E:\\JNI\\spring-core-2.5.5.jar;E:\\JNI\\commons-io-2.6.jar";
     memset(&vm_args, 0, sizeof(vm_args));
     vm_args.version = JNI_VERSION_1_6;
     vm_args.nOptions = 1;
@@ -1086,6 +1157,7 @@ void startFTPServer()
 
 void populateList(char userID[])
 {
+	(*jvm)->AttachCurrentThread(jvm, (void**) &(env), NULL);
     jclass cls;
     jmethodID mid;
     

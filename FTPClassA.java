@@ -11,27 +11,33 @@
  * @author hari-pt1933
  */
 import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPFile;
 import org.apache.commons.net.PrintCommandListener;
 import org.apache.commons.net.ftp.FTP;
 import org.apache.commons.net.ftp.FTPReply;
 import org.apache.commons.net.ftp.FTPFile;
 
+
 import java.io.IOException;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.TimerTask;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.FileOutputStream;
+import java.util.Timer;
 
 class FTPClassA
 {
     FTPClient ftp = null;
+    long timestamp;
+    
     public FTPClassA()
     {
         int reply;
-	ftp = new FTPClient();
+		ftp = new FTPClient();
         try {
             ftp.connect("localhost",4444);
         } catch (IOException ex) {
@@ -86,16 +92,33 @@ class FTPClassA
         {
             try (FileOutputStream fos = new FileOutputStream(localFilePath))
             {
+                FTPFile file =ftp.mdtmFile(remoteFilePath);
+                this.timestamp=file.getTimestamp().getTimeInMillis();
                 ftp.retrieveFile(remoteFilePath, fos);
             }
             catch (IOException e) {e.printStackTrace();}
         } 
         catch (Exception ex) {Logger.getLogger(FTPClassA.class.getName()).log(Level.SEVERE, null, ex);}
         
-    } 
-    public String[] getFileList(String userID)
+    }
+    public int isChanged(String remoteFilePath)
     {
-	String[] fileList=null;
+        try {
+            FTPFile file =ftp.mdtmFile(remoteFilePath);
+            long timestamp=file.getTimestamp().getTimeInMillis();
+            if(this.timestamp!=timestamp)
+            {
+                this.timestamp=timestamp;
+                return 1;
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(FTPClassA.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return 0;
+    }
+	public String[] getFileList(String userID)
+    {
+		String[] fileList=null;
         int l;
         try {
             FTPFile[] files = ftp.listFiles("/Users/"+userID);
@@ -111,7 +134,7 @@ class FTPClassA
             Logger.getLogger(FTPClassA.class.getName()).log(Level.SEVERE, null, ex);
         }
         return fileList;
-    } 
+    }  
     public void disconnectFTP()
     {
         if (ftp.isConnected()) {
